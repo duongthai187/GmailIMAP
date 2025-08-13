@@ -10,7 +10,6 @@ from loguru import logger
 from email_monitor import EmailMonitorService
 from config import settings
 
-# Global service instance
 email_service: EmailMonitorService = None
 monitor_task: asyncio.Task = None
 
