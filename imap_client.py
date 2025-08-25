@@ -5,7 +5,7 @@ import imaplib
 import email
 import json
 from datetime import datetime, timedelta
-from typing import List, Optional, Generator
+from typing import List, Optional, Generator, Tuple, Set
 from email.header import decode_header
 from imapclient import IMAPClient
 from loguru import logger
@@ -145,27 +145,21 @@ class ImapEmailClient:
             logger.error(f"Error parsing email message: {e}")
             return None
     
-    def fetch_new_emails(self) -> Generator[EmailData, None, None]:
-        """Fetch new emails since last check"""
-        if not self.client:
-            if not self.connect():
-                return
-        
+    def fetch_new_emails(self, processed_uids: Optional[Set[int]] = None) -> Generator[Tuple[int, EmailData], None, None]:
+        """Fetch new emails since last check, excluding already processed UIDs"""        
         try:
-            # Search for emails
-            search_criteria = ['ALL']
-            if self.last_check_time:
-                since_date = self.last_check_time.strftime('%d-%b-%Y')
-                search_criteria = ['SINCE', since_date]
+            since_date = self.last_check_time.strftime('%d-%b-%Y')
+            search_criteria = ['SINCE', since_date]
+            logger.info(f"Lấy mail mới từ ngày: {since_date}")
             
             messages = self.client.search(search_criteria)
-            logger.info(f"Found {len(messages)} emails to process")
+            logger.info(f"Tìm thấy {len(messages)} emails từ IMAP Server")
             
-            # Limit number of emails per check
-            if len(messages) > settings.max_emails_per_check:
-                messages = messages[-settings.max_emails_per_check:]
-                logger.info(f"Limited to {settings.max_emails_per_check} most recent emails")
-            
+            # Filter out already processed UIDs
+            if processed_uids:
+                messages = [uid for uid in messages if uid not in processed_uids]
+                logger.info(f"After UID filtering: {len(messages)} new emails to process")
+
             # Fetch and parse emails
             for uid in messages:
                 try:
@@ -174,16 +168,13 @@ class ImapEmailClient:
                     
                     email_data = self._parse_email_message(message_data, uid)
                     if email_data:
-                        # Only yield emails newer than last check
+                        # Additional timestamp filtering for precision
                         if self.last_check_time is None or email_data.date > self.last_check_time:
-                            yield email_data
+                            yield uid, email_data
                         
                 except Exception as e:
                     logger.error(f"Error processing email UID {uid}: {e}")
                     continue
-            
-            # Update last check time
-            self.last_check_time = datetime.now()
             
         except Exception as e:
             logger.error(f"Error fetching emails: {e}")

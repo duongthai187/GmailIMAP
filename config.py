@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     imap_folder: str = "INBOX"
     
     # Application Settings
-    check_interval_minutes: int = 0.5
+    check_interval_minutes: int = 0.2
     max_emails_per_check: int = 50
     log_level: str = "INFO"
     
@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = False
+        extra = "ignore"  # Ignore extra fields in .env
 
 
 # Global settings instance
