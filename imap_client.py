@@ -153,7 +153,7 @@ class ImapEmailClient:
                 self.client.idle()
                 
                 try:
-                    responses = self.client.idle_check(timeout=5)
+                    responses = self.client.idle_check(timeout=180)
                     
                     if responses:
                         logger.info(f"📧 Nhận từ IDLE Server: {len(responses)} events")
