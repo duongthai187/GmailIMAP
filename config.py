@@ -14,19 +14,15 @@ class Settings(BaseSettings):
     imap_password: str
     imap_folder: str = "INBOX"
     
-    # Application Settings
-    check_interval_minutes: int = 0.2
-    max_emails_per_check: int = 50
-    log_level: str = "INFO"
-    
-    # API Server Settings
-    api_host: str = "0.0.0.0"
-    api_port: int = 8000
-    
     # Kafka Configuration
     kafka_bootstrap_servers: str = "localhost:9092"
     kafka_topic: str = "email-stream"
     kafka_client_id: str = "email_imap_client"
+    
+    # Application Settings (optional)
+    check_interval_minutes: float = 0.5
+    max_emails_per_check: int = 50
+    log_level: str = "INFO"
     
     class Config:
         env_file = ".env"

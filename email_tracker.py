@@ -11,7 +11,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from loguru import logger
-
+from typing import List, Optional, Generator, Tuple, Set
 from imap_client import ImapEmailClient
 from kafka_streamer import KafkaEmailStreamer  
 from email_logger import EmailProcessingLogger
@@ -25,20 +25,38 @@ class SimpleEmailTracker:
         self.running = False
         self.state_file = "email_tracker_state.json"
         
+        # Cache processed UIDs để tránh đọc log files liên tục
+        self.processed_uids_cache: Set[int] = set()
+        self.cache_date: Optional[str] = None  # Track ngày của cache
+        
         self.stats = {
             "start_time": datetime.now(),
             "total_checks": 0,
             "total_emails_found": 0,
             "total_emails_sent": 0,
-            "last_check": None,
             "errors": 0
         }
-        
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
-        
-        # Load previous state if exists
         self._load_state()
+        
+    def _get_processed_uids(self, target_date: datetime) -> Set[int]:
+        """Get processed UIDs with caching for efficiency"""
+        date_str = target_date.strftime('%Y%m%d')
+        
+        # Check if cache is valid for this date
+        if self.cache_date != date_str:
+            logger.info(f"🔄 Loading processed UIDs for {date_str}")
+            self.processed_uids_cache = self.email_logger.get_processed_uids_for_date(target_date)
+            self.cache_date = date_str
+            logger.info(f"📋 Cached {len(self.processed_uids_cache)} processed UIDs")
+        
+        return self.processed_uids_cache
+    
+    def _add_processed_uid(self, uid: int):
+        """Add UID to cache when processing new email"""
+        self.processed_uids_cache.add(uid)
+        logger.debug(f"Added UID {uid} to cache")
     
     def _load_state(self):
         """Load previous tracking state from file"""
@@ -47,13 +65,11 @@ class SimpleEmailTracker:
                 with open(self.state_file, 'r') as f:
                     state = json.load(f)
                 
-                # Set last_check_time in IMAP client
                 if state.get('last_check_time'):
-                    last_check = datetime.fromisoformat(state['last_check_time'])
-                    self.imap_client.last_check_time = last_check
+                    self.imap_client.last_check_tim = datetime.fromisoformat(state['last_check_time'])
                     interrupted_at = state.get('interrupted_at')
                     print(f"📂 Found previous session state:")
-                    print(f"   📅 Last check: {last_check.strftime('%H:%M:%S %d-%b-%Y')}")
+                    print(f"   📅 Last check: {datetime.fromisoformat(state['last_check_time']).strftime('%H:%M:%S %d-%b-%Y')}")
                     if interrupted_at:
                         print(f"   🛑 Interrupted: {datetime.fromisoformat(interrupted_at).strftime('%H:%M:%S %d-%b-%Y')}")
                     print(f"   🔄 Will resume from last check time")
@@ -67,7 +83,6 @@ class SimpleEmailTracker:
             print("📂 Starting fresh due to state load error")
     
     def _save_state(self):
-        """Save current tracking state to file"""
         try:
             state = {
                 'last_check_time': self.imap_client.last_check_time.isoformat() if self.imap_client.last_check_time else None,
@@ -79,17 +94,13 @@ class SimpleEmailTracker:
                     'errors': self.stats['errors']
                 }
             }
-            
             with open(self.state_file, 'w') as f:
                 json.dump(state, f, indent=2)
-                
-            logger.info(f"💾 State saved to {self.state_file}")
-            
+            logger.info(f"💾 Lưu trạng thái vào {self.state_file}")
         except Exception as e:
-            logger.error(f"Failed to save state: {e}")
+            logger.error(f"Lỗi khi lưu trạng thái: {e}")
     
     def _save_shutdown_log(self):
-        """Save detailed shutdown log to lakehouse"""
         try:
             # Create lakehouse log directory
             log_dir = "Files/Emails/Logs"
@@ -116,18 +127,16 @@ class SimpleEmailTracker:
                     "total_emails_found": self.stats["total_emails_found"],
                     "total_emails_sent": self.stats["total_emails_sent"],
                     "errors": self.stats["errors"],
-                    "last_check": self.stats["last_check"].isoformat() if self.stats["last_check"] else None
                 },
                 "tracking_state": {
                     "last_check_time": self.imap_client.last_check_time.isoformat() if self.imap_client.last_check_time else None,
-                    "will_resume_from": self.imap_client.last_check_time.isoformat() if self.imap_client.last_check_time else "server_start_time"
+                    "will_resume_from": self.imap_client.last_check_time.isoformat() if self.imap_client.last_check_time else None
                 },
                 "config": {
                     "imap_server": settings.imap_server,
                     "imap_username": settings.imap_username,
                     "kafka_servers": settings.kafka_bootstrap_servers,
                     "kafka_topic": settings.kafka_topic,
-                    "check_interval_minutes": settings.check_interval_minutes
                 }
             }
             
@@ -143,7 +152,7 @@ class SimpleEmailTracker:
             print(f"⚠️  Could not save shutdown log: {e}")
     
     def _signal_handler(self, signum, frame):
-        print(f"\n🛑 Received signal {signum}, shutting down gracefully...")
+        print(f"\n🛑 Nhận lệnh ngắt {signum}, thực hiện dừng chương trình...")
         self.stop()
     
     def start(self):
@@ -155,7 +164,7 @@ class SimpleEmailTracker:
         self.stats["start_time"] = datetime.now()
         
         # Setup logging
-        logger.remove()  # Remove default logger
+        logger.remove()
         logger.add(
             sys.stdout, 
             format="<green>{time:HH:mm:ss}</green> | <level>{level}</level> | {message}",
@@ -202,55 +211,41 @@ class SimpleEmailTracker:
         return True
     
     def _main_loop(self):
-        print(f"\n🔄 Starting main loop (Press Ctrl+C to stop)")
+        print(f"\n🔄 Starting real-time email monitoring with IMAP IDLE")
         print("-" * 60)
         
-        while self.running:
-            try:
-                self._check_emails()
-                
-                if self.running:  # Check if still running after email check
-                    # Calculate next check time properly
-                    next_check = datetime.now() + timedelta(minutes=settings.check_interval_minutes)
-                    print(f"⏳ Next check at: {next_check.strftime('%H:%M:%S')}")
-                    
-                    # Sleep with status updates
-                    self._smart_sleep(next_check)
-                    
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                logger.error(f"❌ Error in main loop: {e}")
-                self.stats["errors"] += 1
-                time.sleep(5)  # Wait a bit before retrying
-    
-    def _check_emails(self):
-        if self.imap_client.last_check_time:
-            check_time = self.imap_client.last_check_time
-            print(f"\n🔍 Resuming email check from: [{check_time.strftime('%H:%M:%S %d-%b-%Y')}]")
-        else:
-            check_time = self.imap_client.last_check_time = datetime.now()
-            print(f"\n🔍 Initial email check at: [{check_time.strftime('%H:%M:%S %d-%b-%Y')}]")        
-        # Load processed UIDs for the check date
-        processed_uids = set()
-        processed_uids = self.email_logger.get_processed_uids_for_date(self.imap_client.last_check_time)
-        print(f"📋 Loaded {len(processed_uids)} already processed UIDs from logs")
+        # Do initial check for any existing emails
+        print("🔍 Performing initial email check...")
+        self._check_existing_emails()
         
-        # Update tracking stats
-        self.stats["total_checks"] += 1
-        self.stats["last_check"] = check_time  # Use actual check time, not always now()
+        # Start real-time monitoring with IMAP IDLE
+        print("📡 Starting real-time IDLE monitoring...")
+        self._start_realtime_monitoring()
+    
+    def _check_existing_emails(self):
+        """Check for existing emails (one-time on startup)"""
+        if self.imap_client.last_check_time:
+            print(f"📂 Checking existing emails from: [{self.imap_client.last_check_time.strftime('%H:%M:%S %d-%b-%Y')}]")
+        else:
+            self.imap_client.last_check_time = datetime.now()
+            print(f"📂 Initial check at: [{self.imap_client.last_check_time.strftime('%H:%M:%S %d-%b-%Y')}]")
+        
+        # Load processed UIDs for the check date (with caching)
+        processed_uids = self._get_processed_uids(self.imap_client.last_check_time)
+        print(f"📋 Loaded {len(processed_uids)} already processed UIDs from cache")
+        
+        # Start logging session
+        self.email_logger.start_check_session()
         
         emails_found = 0
         emails_sent = 0
         
         try:
-            # Fetch emails from IMAP with UID filtering
-            for uid, email_data in self.imap_client.fetch_new_emails(processed_uids):
+            for uid, email_data in self.imap_client._fetch_latest_emails(processed_uids):
                 emails_found += 1
                 print(f"  📧 Found UID {uid}: {email_data.subject[:50]}...")
                 print(f"      From: {email_data.sender}")
                 
-                # Send to Kafka
                 kafka_status = "error"
                 if self.kafka_streamer.send_email(email_data):
                     emails_sent += 1
@@ -259,53 +254,97 @@ class SimpleEmailTracker:
                 else:
                     print(f"      ❌ Failed to send to Kafka")
                 
-                # Log this processed email
                 self.email_logger.log_processed_email(email_data, uid, kafka_status)
+                
+                # Add to cache for future checks
+                self._add_processed_uid(uid)
                     
         except Exception as e:
-            logger.error(f"❌ Error checking emails: {e}")
-            self.stats["errors"] += 1
-            return
+            logger.error(f"❌ Error in initial check: {e}")
         finally:
-            # Always finish the logging session
             try:
                 log_file = self.email_logger.finish_check_session()
-                print(f"📝 Check session saved: {log_file}")
+                if emails_found > 0:
+                    print(f"📝 Initial check logged: {log_file}")
             except Exception as e:
-                logger.error(f"Failed to save check session: {e}")
+                logger.error(f"Failed to save initial check: {e}")
         
-        # Update stats
+        # Update stats and last_check_time
+        self.stats["total_checks"] += 1
         self.stats["total_emails_found"] += emails_found
         self.stats["total_emails_sent"] += emails_sent
-        
-        # Update last_check_time ONLY after successful check
-        # This ensures we don't lose emails if the process is interrupted
         self.imap_client.last_check_time = datetime.now()
         
-        # Show results
         if emails_found > 0:
-            print(f"📊 Results: {emails_found} found, {emails_sent} sent to Kafka")
+            print(f"📊 Initial check: {emails_found} found, {emails_sent} sent to Kafka")
         else:
-            print("📭 No new emails found")
-        
-        # Show session stats
-        runtime = datetime.now() - self.stats["start_time"]
-        print(f"📈 Session: {self.stats['total_checks']} checks, "
-              f"{self.stats['total_emails_found']} emails, "
-              f"{self.stats['total_emails_sent']} sent, "
-              f"Runtime: {str(runtime).split('.')[0]}")
+            print("📭 No existing emails to process")
     
-    def _smart_sleep(self, next_check):
-        while self.running and time.time() < next_check.timestamp():
-            time.sleep(1) 
+    def _start_realtime_monitoring(self):
+        while self.running:
+            try:
+                # Use cached processed UIDs (no need to reload every time!)
+                processed_uids = self._get_processed_uids(datetime.now())
+                
+                # Start IDLE monitoring - this will block until new emails arrive
+                for uid, email_data in self.imap_client.start_idle_monitoring(processed_uids):
+                    if not self.running:
+                        break
+                        
+                    print(f"\n📧 Real-time email received!")
+                    print(f"  UID {uid}: {email_data.subject[:50]}...")
+                    print(f"  From: {email_data.sender}")
+                    
+                    # Start new logging session for this email
+                    self.email_logger.start_check_session()
+                    
+                    try:
+                        # Send to Kafka
+                        kafka_status = "error"
+                        if self.kafka_streamer.send_email(email_data):
+                            kafka_status = "sent"
+                            print(f"  ✅ Sent to Kafka")
+                        else:
+                            print(f"  ❌ Failed to send to Kafka")
+                        
+                        # Log processed email
+                        self.email_logger.log_processed_email(email_data, uid, kafka_status)
+                        
+                        # Add to cache immediately
+                        self._add_processed_uid(uid)
+                        
+                        # Update stats
+                        self.stats["total_emails_found"] += 1
+                        if kafka_status == "sent":
+                            self.stats["total_emails_sent"] += 1
+                        
+                        # Update last check time
+                        self.imap_client.last_check_time = datetime.now()
+                        
+                    finally:
+                        # Finish logging session
+                        try:
+                            log_file = self.email_logger.finish_check_session()
+                            print(f"  📝 Logged: {os.path.basename(log_file)}")
+                        except Exception as e:
+                            logger.error(f"Failed to save real-time log: {e}")
+                    
+                    # Show live stats
+                    runtime = datetime.now() - self.stats["start_time"]
+                    print(f"  📈 Total: {self.stats['total_emails_found']} emails, "
+                          f"{self.stats['total_emails_sent']} sent, "
+                          f"Runtime: {str(runtime).split('.')[0]}")
+                    
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                logger.error(f"❌ Error in real-time monitoring: {e}")
+                self.stats["errors"] += 1
+                time.sleep(5)  # Wait before retrying
     
     def stop(self):
-        print(f"\n🛑 Stopping Email Tracker...")
+        print(f"\n🛑 Đang dừng Email Tracker...")
         self.running = False
-        
-        # Update last_check_time before saving
-        if self.stats["last_check"]:
-            self.imap_client.last_check_time = self.stats["last_check"]
         
         # Save current state for resume
         self._save_state()
@@ -331,8 +370,8 @@ class SimpleEmailTracker:
             if self.imap_client.last_check_time:
                 print(f"   📅 Will resume from: {self.imap_client.last_check_time}")
         
-        print("✅ Email Tracker stopped successfully!")
-        print(f"💾 State and logs saved to lakehouse for next restart")
+        print("✅ Email Tracker dừng thành công.")
+        print(f"💾 Đã lưu trạng thái cho lần chạy tiếp theo.")
 
 def main():
     """Main function"""

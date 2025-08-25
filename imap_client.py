@@ -4,6 +4,7 @@ IMAP client for fetching emails
 import imaplib
 import email
 import json
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional, Generator, Tuple, Set
 from email.header import decode_header
@@ -145,40 +146,65 @@ class ImapEmailClient:
             logger.error(f"Error parsing email message: {e}")
             return None
     
-    def fetch_new_emails(self, processed_uids: Optional[Set[int]] = None) -> Generator[Tuple[int, EmailData], None, None]:
-        """Fetch new emails since last check, excluding already processed UIDs"""        
+    def start_idle_monitoring(self, processed_uids: Optional[Set[int]] = None) -> Generator[Tuple[int, EmailData], None, None]:
         try:
+            while True:
+                logger.info("Đang chờ thông báo IDLE từ server...")
+                self.client.idle()
+                
+                try:
+                    responses = self.client.idle_check(timeout=30)
+                    
+                    if responses:
+                        logger.info(f"📧 Nhận từ IDLE Server: {len(responses)} events")
+                        self.client.idle_done()
+                        yield from self._fetch_latest_emails(processed_uids)
+                        
+                    else:
+                        # Timeout occurred, refresh IDLE connection
+                        self.client.idle_done()
+                        logger.debug("⏰ IDLE timeout, refreshing connection...")
+                        
+                except Exception as idle_error:
+                    logger.warning(f"Lỗi IDLE: {idle_error}")
+                    self.client.idle_done()
+                    yield from self._fetch_latest_emails(processed_uids)
+                    logger.debug("⏰ Chờ 5 giây khởi động lại IDLE...")
+                    time.sleep(5)  # Wait before retrying IDLE
+                    
+        except Exception as e:
+            logger.error(f"❌ IDLE monitoring error: {e}")
+            self.client.idle_done()
+            
+    def _fetch_latest_emails(self, processed_uids: Optional[Set[int]] = None) -> Generator[Tuple[int, EmailData], None, None]:
+        """Fetch the most recent emails (helper for IDLE)"""
+        try:
+            # Lấy email của hôm đó
             since_date = self.last_check_time.strftime('%d-%b-%Y')
+            
             search_criteria = ['SINCE', since_date]
-            logger.info(f"Lấy mail mới từ ngày: {since_date}")
+            logger.debug(f"Lấy mail của ngày: {since_date}")
             
             messages = self.client.search(search_criteria)
-            logger.info(f"Tìm thấy {len(messages)} emails từ IMAP Server")
             
-            # Filter out already processed UIDs
             if processed_uids:
                 messages = [uid for uid in messages if uid not in processed_uids]
-                logger.info(f"After UID filtering: {len(messages)} new emails to process")
+            logger.info(f"📬 Tìm thấy {len(messages)} emails mới.")
 
             # Fetch and parse emails
             for uid in messages:
                 try:
                     response = self.client.fetch([uid], ['RFC822'])
                     message_data = response[uid][b'RFC822']
-                    
                     email_data = self._parse_email_message(message_data, uid)
                     if email_data:
-                        # Additional timestamp filtering for precision
-                        if self.last_check_time is None or email_data.date > self.last_check_time:
-                            yield uid, email_data
-                        
+                        yield uid, email_data
                 except Exception as e:
                     logger.error(f"Error processing email UID {uid}: {e}")
                     continue
-            
+
         except Exception as e:
-            logger.error(f"Error fetching emails: {e}")
-            # Try to reconnect on error
+            logger.error(f"Error fetching latest emails: {e}")
             self.disconnect()
     
     def get_status(self) -> dict:

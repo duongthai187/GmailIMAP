@@ -42,7 +42,6 @@ class EmailProcessingLogger:
         }
         
         logger.info(f"📝 Started check session: {self.current_check_id}")
-        return self.current_check_id
     
     def log_processed_email(self, email_data: EmailData, uid: int, kafka_status: str):
         if not self.current_log_data:
