@@ -153,7 +153,7 @@ class ImapEmailClient:
                 self.client.idle()
                 
                 try:
-                    responses = self.client.idle_check(timeout=30)
+                    responses = self.client.idle_check(timeout=5)
                     
                     if responses:
                         logger.info(f"📧 Nhận từ IDLE Server: {len(responses)} events")
@@ -167,14 +167,19 @@ class ImapEmailClient:
                         
                 except Exception as idle_error:
                     logger.warning(f"Lỗi IDLE: {idle_error}")
-                    self.client.idle_done()
-                    yield from self._fetch_latest_emails(processed_uids)
+                    try:
+                        self.client.idle_done()
+                    except:
+                        pass
                     logger.debug("⏰ Chờ 5 giây khởi động lại IDLE...")
                     time.sleep(5)  # Wait before retrying IDLE
                     
         except Exception as e:
             logger.error(f"❌ IDLE monitoring error: {e}")
-            self.client.idle_done()
+            try:
+                self.client.idle_done()
+            except:
+                pass
             
     def _fetch_latest_emails(self, processed_uids: Optional[Set[int]] = None) -> Generator[Tuple[int, EmailData], None, None]:
         """Fetch the most recent emails (helper for IDLE)"""

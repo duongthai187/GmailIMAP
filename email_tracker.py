@@ -168,7 +168,6 @@ class SimpleEmailTracker:
         logger.add(
             sys.stdout, 
             format="<green>{time:HH:mm:ss}</green> | <level>{level}</level> | {message}",
-            level=settings.log_level
         )
         logger.add(
             "logs/email_tracker.log",
@@ -180,7 +179,6 @@ class SimpleEmailTracker:
         logger.info("🚀 Starting Simple Email Tracker")
         logger.info(f"📧 IMAP: {settings.imap_username}@{settings.imap_server}")
         logger.info(f"📤 Kafka: {settings.kafka_bootstrap_servers} → {settings.kafka_topic}")
-        logger.info(f"⏰ Check interval: {settings.check_interval_minutes} minutes")
         
         if not self._connect_services():
             return False
