@@ -15,6 +15,7 @@ from typing import List, Optional, Generator, Tuple, Set
 from imap_client import ImapEmailClient
 from kafka_streamer import KafkaEmailStreamer  
 from email_logger import EmailProcessingLogger
+from email_router import EmailRouter
 from config import settings
 
 class SimpleEmailTracker:
@@ -22,6 +23,7 @@ class SimpleEmailTracker:
         self.imap_client = ImapEmailClient()
         self.kafka_streamer = KafkaEmailStreamer()
         self.email_logger = EmailProcessingLogger()
+        self.email_router = EmailRouter()  # Thêm router
         self.running = False
         self.state_file = "email_tracker_state.json"
         
@@ -136,7 +138,6 @@ class SimpleEmailTracker:
                     "imap_server": settings.imap_server,
                     "imap_username": settings.imap_username,
                     "kafka_servers": settings.kafka_bootstrap_servers,
-                    "kafka_topic": settings.kafka_topic,
                 }
             }
             
@@ -178,7 +179,6 @@ class SimpleEmailTracker:
         
         logger.info("🚀 Starting Simple Email Tracker")
         logger.info(f"📧 IMAP: {settings.imap_username}@{settings.imap_server}")
-        logger.info(f"📤 Kafka: {settings.kafka_bootstrap_servers} → {settings.kafka_topic}")
         
         if not self._connect_services():
             return False
@@ -225,7 +225,7 @@ class SimpleEmailTracker:
         if self.imap_client.last_check_time:
             print(f"📂 Checking existing emails from: [{self.imap_client.last_check_time.strftime('%H:%M:%S %d-%b-%Y')}]")
         else:
-            self.imap_client.last_check_time = datetime.now()
+            self.imap_client.last_check_time = datetime(2025, 8, 21)
             print(f"📂 Initial check at: [{self.imap_client.last_check_time.strftime('%H:%M:%S %d-%b-%Y')}]")
         
         # Load processed UIDs for the check date (with caching)
@@ -244,11 +244,15 @@ class SimpleEmailTracker:
                 print(f"  📧 Found UID {uid}: {email_data.subject[:50]}...")
                 print(f"      From: {email_data.sender}")
                 
+                # Xác định topic dựa trên email sender
+                topic = self.email_router.get_topic_for_email(email_data)
+                print(f"      📤 Bắn tới Topic: {topic}")
+                
                 kafka_status = "error"
-                if self.kafka_streamer.send_email(email_data):
+                if self.kafka_streamer.send_email(email_data, topic):
                     emails_sent += 1
                     kafka_status = "sent"
-                    print(f"      ✅ Sent to Kafka")
+                    print(f"      ✅ Đã bắn tới Kafka topic: {topic}")
                 else:
                     print(f"      ❌ Failed to send to Kafka")
                 
@@ -297,11 +301,15 @@ class SimpleEmailTracker:
                     self.email_logger.start_check_session()
                     
                     try:
+                        # Xác định topic dựa trên email sender
+                        topic = self.email_router.get_topic_for_email(email_data)
+                        print(f"  📤 Bắn tới Topic: {topic}")
+                        
                         # Send to Kafka
                         kafka_status = "error"
-                        if self.kafka_streamer.send_email(email_data):
+                        if self.kafka_streamer.send_email(email_data, topic):
                             kafka_status = "sent"
-                            print(f"  ✅ Sent to Kafka")
+                            print(f"  ✅ Đã bắn tới Kafka topic: {topic}")
                         else:
                             print(f"  ❌ Failed to send to Kafka")
                         

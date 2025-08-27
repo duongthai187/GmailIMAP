@@ -14,9 +14,10 @@ from config import settings
 class KafkaEmailStreamer:
     def __init__(self):
         self.bootstrap_servers = settings.kafka_bootstrap_servers
-        self.topic = settings.kafka_topic
+        self.topic = "emails-default" # Default topic
         self.client_id = settings.kafka_client_id
         self.producer: Optional[KafkaProducer] = None
+        self.topic: Optional[str] = None
         
     def connect(self) -> bool:
         """Connect to Kafka cluster"""
@@ -47,12 +48,12 @@ class KafkaEmailStreamer:
             finally:
                 self.producer = None
     
-    def send_email(self, email_data: EmailData) -> bool:
+    def send_email(self, email_data: EmailData, topic: str = None) -> bool:
         """Send email data to Kafka topic"""
         if not self.producer:
             if not self.connect():
                 return False
-        
+        target_topic = topic or self.topic
         try:
             # Create stream message
             stream_message = EmailStreamMessage(
@@ -62,17 +63,19 @@ class KafkaEmailStreamer:
             
             # Send to Kafka
             future = self.producer.send(
-                self.topic,
-                value=stream_message.dict(),
+                target_topic,
+                value=stream_message.model_dump(),
                 key=email_data.message_id
             )
             
-            # Wait for send to complete
             record_metadata = future.get(timeout=10)
             
-            logger.info(f"Email sent to Kafka - Topic: {record_metadata.topic}, "
+            logger.info(f"Email sent to Kafka - Topic: {target_topic}, "
                        f"Partition: {record_metadata.partition}, "
-                       f"Offset: {record_metadata.offset}")
+                       f"Offset: {record_metadata.offset}, "
+                       f"Người gửi: {email_data.sender}, "
+                       f"{email_data.body_text}")
+            
             return True
             
         except Exception as e:

@@ -24,6 +24,15 @@ class ImapEmailClient:
         self.folder = settings.imap_folder
         self.client: Optional[IMAPClient] = None
         self.last_check_time: Optional[datetime] = None
+        self.from_list: List[str] = ["duongcongthai18703@gmail.com", "thaibha123456@gmail.com"]  
+
+    def build_or_criteria(self, from_list):
+        if not from_list:
+            return []
+        if len(from_list) == 1:
+            return ['FROM', from_list[0]]
+        else:
+            return ['OR', 'FROM', from_list[0], self.build_or_criteria(from_list[1:])]
         
     def connect(self) -> bool:
         """Connect to IMAP server"""
@@ -187,7 +196,8 @@ class ImapEmailClient:
             # Lấy email của hôm đó
             since_date = self.last_check_time.strftime('%d-%b-%Y')
             
-            search_criteria = ['SINCE', since_date]
+            # search_criteria = ['SINCE', since_date]
+            search_criteria = ['SINCE', since_date] + self.build_or_criteria(self.from_list)
             logger.debug(f"Lấy mail của ngày: {since_date}")
             
             messages = self.client.search(search_criteria)

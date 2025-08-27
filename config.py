@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     
     # Kafka Configuration
     kafka_bootstrap_servers: str 
-    kafka_topic: str 
     kafka_client_id: str 
     
     model_config = {
