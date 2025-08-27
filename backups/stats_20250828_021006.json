@@ -1,0 +1,52 @@
+{
+  "total": 8,
+  "by_topic": {
+    "thaibha123456": {
+      "count": 1,
+      "total_amount": 123456.0
+    },
+    "duongcongthai18703": {
+      "count": 7,
+      "total_amount": 0
+    }
+  },
+  "by_date": {
+    "2025-08-27": {
+      "count": 2,
+      "total_amount": 123456.0,
+      "by_topic": {
+        "thaibha123456": {
+          "count": 1,
+          "total_amount": 123456.0
+        },
+        "duongcongthai18703": {
+          "count": 1,
+          "total_amount": 0
+        }
+      }
+    },
+    "2025-08-25": {
+      "count": 4,
+      "total_amount": 0,
+      "by_topic": {
+        "duongcongthai18703": {
+          "count": 4,
+          "total_amount": 0
+        }
+      }
+    },
+    "2025-08-26": {
+      "count": 2,
+      "total_amount": 0,
+      "by_topic": {
+        "duongcongthai18703": {
+          "count": 2,
+          "total_amount": 0
+        }
+      }
+    }
+  },
+  "total_amount": 123456.0,
+  "emails_with_amount": 1,
+  "last_updated": "2025-08-28T02:10:06.983404"
+}
